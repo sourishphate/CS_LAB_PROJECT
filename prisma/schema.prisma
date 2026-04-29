@@ -1,0 +1,272 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./db/custom.db"
+}
+
+// Scan management
+model Scan {
+  id          String      @id @default(cuid())
+  target      String      // Domain or IP address
+  status      String      @default("pending") // pending, running, completed, failed, paused
+  progress    Int         @default(0) // 0-100 percentage
+  currentPhase String?    // Current phase being executed
+  scope       String?     @default("full") // full, dns, osint, network
+  rateLimit   Int         @default(10) // Requests per second
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  startedAt   DateTime?
+  completedAt DateTime?
+  
+  // Relations
+  reconResults     ReconResult?
+  serviceResults   ServiceResult[]
+  sslResults       SSLResult[]
+  vulnResults      VulnerabilityResult[]
+  attackSurface    AttackSurfaceNode[]
+  report          Report?
+  
+  @@map("scans")
+}
+
+// Phase 1: Reconnaissance Results
+model ReconResult {
+  id          String   @id @default(cuid())
+  scanId      String   @unique
+  scan        Scan     @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  
+  // WHOIS data
+  whoisData   String?  // JSON string
+  
+  // DNS Records
+  dnsRecords  String?  // JSON string - A, MX, NS, TXT, CNAME
+  
+  // Subdomains
+  subdomains  String?  // JSON array
+  
+  // OSINT / Email harvesting
+  emails      String?  // JSON array
+  names       String?  // JSON array
+  
+  // Network/ASN data
+  asnData     String?  // JSON string
+  
+  // Shodan data
+  shodanData  String?  // JSON string
+  
+  // Aggregated IPs
+  liveIPs     String?  // JSON array
+  
+  // Raw output file path
+  rawOutput   String?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("recon_results")
+}
+
+// Phase 2: Service Fingerprinting Results
+model ServiceResult {
+  id          String   @id @default(cuid())
+  scanId      String
+  scan        Scan     @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  
+  ip          String
+  port        Int
+  protocol    String?  // tcp, udp
+  service     String?  // http, ssh, ftp, etc.
+  version     String?  // Software version
+  banner      String?  // Raw banner
+  os          String?  // Detected OS
+  cveFlags    String?  // JSON array of CVE IDs
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("service_results")
+}
+
+// Phase 3: SSL/TLS Analysis Results
+model SSLResult {
+  id              String   @id @default(cuid())
+  scanId          String
+  scan            Scan     @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  
+  host            String
+  port            Int      @default(443)
+  
+  // Certificate info
+  issuer          String?
+  subject         String?
+  validFrom       String?
+  validTo         String?
+  daysRemaining   Int?
+  isExpired       Boolean  @default(false)
+  isSelfSigned    Boolean  @default(false)
+  cnMismatch      Boolean  @default(false)
+  
+  // Protocol & Cipher
+  protocol        String?  // TLS 1.2, TLS 1.3, etc.
+  cipherSuite     String?
+  keySize         Int?
+  
+  // Issues detected
+  weakProtocol    Boolean  @default(false)
+  weakCipher      Boolean  @default(false)
+  weakKey         Boolean  @default(false)
+  chainValid      Boolean  @default(true)
+  
+  // Risk rating
+  riskRating      String   @default("green") // green, yellow, red
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@map("ssl_results")
+}
+
+// Phase 4: Vulnerability Results
+model VulnerabilityResult {
+  id          String   @id @default(cuid())
+  scanId      String
+  scan        Scan     @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  
+  cveId       String   // CVE-YYYY-NNNN
+  title       String?
+  description String?
+  
+  // Affected service
+  host        String
+  port        Int?
+  service     String?
+  
+  // Severity
+  cvssScore   Float
+  severity    String   // critical, high, medium, low, info
+  
+  // Exploit info
+  exploitAvailable Boolean @default(false)
+  exploitDbId      String?
+  
+  // Status
+  status      String   @default("open") // open, verified, false-positive, fixed
+  
+  // References
+  references  String?  // JSON array of URLs
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("vulnerability_results")
+}
+
+// Attack Surface Graph Nodes
+model AttackSurfaceNode {
+  id          String   @id @default(cuid())
+  scanId      String
+  scan        Scan     @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  
+  nodeType    String   // domain, ip, port, service, vuln
+  label       String   // Display label
+  data        String?  // JSON string with additional data
+  
+  // Graph relationships (stored as JSON)
+  edges       String?  // JSON array of connected node IDs
+  
+  createdAt   DateTime @default(now())
+  
+  @@map("attack_surface_nodes")
+}
+
+// CVE Cache (local database for offline lookup)
+model CVECache {
+  id              String   @id @default(cuid())
+  cveId           String   @unique // CVE-YYYY-NNNN
+  
+  title           String?
+  description     String?
+  cvssScore       Float?
+  severity        String?
+  
+  affectedProducts String? // JSON array
+  references      String?  // JSON array
+  
+  // Exploit info
+  exploitAvailable Boolean @default(false)
+  exploitDbId      String?
+  
+  lastUpdated     DateTime @default(now())
+  
+  @@map("cve_cache")
+}
+
+// Scan Reports
+model Report {
+  id          String   @id @default(cuid())
+  scanId      String   @unique
+  scan        Scan     @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  
+  // Summary stats
+  totalHosts      Int      @default(0)
+  totalPorts      Int      @default(0)
+  totalVulns      Int      @default(0)
+  criticalVulns   Int      @default(0)
+  highVulns       Int      @default(0)
+  mediumVulns     Int      @default(0)
+  lowVulns        Int      @default(0)
+  
+  // Risk score (0-100)
+  riskScore       Int      @default(0)
+  
+  // NIST/CIS mappings
+  complianceData  String?  // JSON string
+  
+  // Generated reports
+  pdfPath         String?
+  jsonPath        String?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@map("reports")
+}
+
+// Audit Log
+model AuditLog {
+  id          String   @id @default(cuid())
+  action      String   // scan_started, scan_completed, report_exported, etc.
+  targetType  String?  // scan, report, etc.
+  targetId    String?
+  details     String?  // JSON string
+  ipAddress   String?
+  userAgent   String?
+  
+  createdAt   DateTime @default(now())
+  
+  @@map("audit_logs")
+}
+
+// Hash Cracker Results
+model HashResult {
+  id          String   @id @default(cuid())
+  scanId      String?
+  
+  hashType    String   // md5, sha1, sha256, etc.
+  hashValue   String
+  cracked     Boolean  @default(false)
+  plaintext   String?
+  
+  // Method used
+  method      String?  // dictionary, brute-force, rainbow
+  
+  createdAt   DateTime @default(now())
+  
+  @@map("hash_results")
+}
